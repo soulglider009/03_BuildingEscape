@@ -25,7 +25,10 @@ public:
 
 private:
 	// How far ahead of the player can we reach in cm
-	float Reach = 100.f;
+	float Reach = 200.f;
+	float ImpulsePower = 2000.0f;
+
+	void Throw();
 	
 	UPhysicsHandleComponent* PhysicsHandle = nullptr;
 

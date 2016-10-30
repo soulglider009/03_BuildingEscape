@@ -26,25 +26,17 @@ void UGrabber::BeginPlay()
 void UGrabber::FindPhysicsHandleComponent()
 {
 	PhysicsHandle = GetOwner()->FindComponentByClass<UPhysicsHandleComponent>();
-	if (PhysicsHandle == nullptr)
-	{
-		UE_LOG(LogTemp, Error, TEXT("%s missing physics handle component"), *GetOwner()->GetName())
-	}
 }
 
 /// Look for attached Input Component (only appears at run time)
 void UGrabber::SetupInputComponent()
 {
 	InputComponent = GetOwner()->FindComponentByClass<UInputComponent>();
-	if (InputComponent)
-	{
-		InputComponent->BindAction("Grab", IE_Pressed, this, &UGrabber::Grab);
-		InputComponent->BindAction("Grab", IE_Released, this, &UGrabber::Release);
-	}
-	else
-	{
-		UE_LOG(LogTemp, Error, TEXT("%s missing input component"), *GetOwner()->GetName())
-	}
+
+	if (!ensure(InputComponent)) { return; }
+	InputComponent->BindAction("Grab", IE_Pressed, this, &UGrabber::Grab);
+	InputComponent->BindAction("Grab", IE_Released, this, &UGrabber::Release);
+	InputComponent->BindAction("Throw", IE_Pressed, this, &UGrabber::Throw);
 }
 
 // Called every frame
@@ -52,38 +44,70 @@ void UGrabber::TickComponent(float DeltaTime, ELevelTick TickType, FActorCompone
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
-	if (!PhysicsHandle) { return; }
-	// if the physics handle is attached
+	if (!ensure(PhysicsHandle)) { return; }
+
 	if (PhysicsHandle->GrabbedComponent)
 	{
-		// move the object that we're holding
-		PhysicsHandle->SetTargetLocation(GetReachLineEnd());
+		PhysicsHandle->SetTargetLocation(GetReachLineEnd()); //TODO Unreal engine doesn't seem to need this
 	}
 }
 
 void UGrabber::Grab() {
 	/// LINE TRACE and see if we reach any actors with physics body collision channel set
 	auto HitResult = GetFirstPhysicsBodyInReach();
-	auto ComponentToGrab = HitResult.GetComponent(); // gets the mesh in our case
 	auto ActorHit = HitResult.GetActor();
 
-	/// If we hit something then attach a physics handle
-	if (ActorHit)
-	{
-		if (!PhysicsHandle) { return; }
-		PhysicsHandle->GrabComponent(
-			ComponentToGrab,
-			NAME_None, // no bones needed
-			ComponentToGrab->GetOwner()->GetActorLocation(),
-			true // allow rotation
-		);
-	}
+	if (!ActorHit) { return;}
+	auto GrabbedComponent = HitResult.GetComponent(); // gets the mesh in our case
+
+	/// If we hit something then grab
+	if (!PhysicsHandle) { return; }
+	PhysicsHandle->GrabComponent(
+		GrabbedComponent,
+		NAME_None, // no bones needed
+		GrabbedComponent->GetOwner()->GetActorLocation(),
+		true // allow rotation
+	);
+	GrabbedComponent->SetCollisionResponseToChannel(ECollisionChannel::ECC_Pawn, ECollisionResponse::ECR_Ignore);
 }
 
 void UGrabber::Release()
 {
-	if (!PhysicsHandle) { return; }
+	if (!ensure(PhysicsHandle)) { return; }
+	//Need to reference this before releasing, to find it after
+	auto GrabbedComponent = PhysicsHandle->GrabbedComponent;
+
+	if (!(GrabbedComponent)) { return; }
 	PhysicsHandle->ReleaseComponent();
+
+	auto PropLinearVelocityVector = GrabbedComponent->GetPhysicsLinearVelocity();
+	UE_LOG(LogTemp, Warning, TEXT("Forward Vector: %s"), *PropLinearVelocityVector.ToString());
+	auto DampedVector = PropLinearVelocityVector / 5; //This is hardcoded not good TODO remove magic number and allow it to be editable on the pawn bp
+	UE_LOG(LogTemp, Warning, TEXT("Damped Vector: %s"), *DampedVector.ToString());
+	GrabbedComponent->SetPhysicsLinearVelocity(DampedVector, false, NAME_None);
+}
+
+void UGrabber::Throw() 
+{
+
+	if (!ensure(PhysicsHandle)) { return; }
+	auto GrabbedComponent = PhysicsHandle->GrabbedComponent;
+
+	if (!(GrabbedComponent)) { return; }
+	PhysicsHandle->ReleaseComponent();
+	GrabbedComponent->WakeRigidBody();
+
+	//Get forward Vector based on player view
+	FVector PlayerViewPointLocation;
+	FRotator PlayerViewPointRotation;
+	GetWorld()->GetFirstPlayerController()->GetPlayerViewPoint(
+		OUT PlayerViewPointLocation,
+		OUT PlayerViewPointRotation
+	);
+	auto ForwardVector = PlayerViewPointRotation.Vector().GetSafeNormal();
+
+	//Throw the object
+	GrabbedComponent->AddImpulse(ImpulsePower*ForwardVector, NAME_None, true);
 }
 
 const FHitResult UGrabber::GetFirstPhysicsBodyInReach()
